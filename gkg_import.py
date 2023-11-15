@@ -1,14 +1,22 @@
+from __future__ import annotations
+
 import datetime
 import dataclasses
 import json
+import math
+import multiprocessing
 import optparse
+import os
 import pathlib
 import sys
+import traceback
 import typing
+import zipfile
 
 import bson # type: ignore
 import pymongo
 
+import import_util
 import options
 
 from mymongo import with_mongo
@@ -55,8 +63,8 @@ class V15Tone:
     positive_score: float
     negative_score: float
     polarity: float
-    active_reference_dencity: float
-    self_or_group_reference_dencity: float
+    active_reference_density: float
+    self_or_group_reference_density: float
     word_count: int
 
     def serialize(self):
@@ -91,7 +99,7 @@ class GKG:
     v2_enhanced_organizations: list[str]
     # v15_tone: list[str]
     # Tone, Positive Score, Negative Score, Polarity,
-    # Activity Reference Dencity, Self/Group Reference Dencity, word-count
+    # Activity Reference Density, Self/Group Reference Density, word-count
     v15_tone: V15Tone
     v21_enhanced_dates: list[datetime.datetime]
     v2_gcam: dict[str, float]
@@ -201,16 +209,46 @@ def run_non_empty_check(columns:list[str], nonempties:set[int]) -> None:
                f"{len(nonempties)}/{len(columns)}")
         nonempties.add(i)
 
+max_8byte_int = int(math.pow(2, 63)) - 1
+min_8byte_int = -int(math.pow(2, 63))
+
+def filter_insane_int_in_v21amount(v21amounts:list[list[typing.Any]],
+                                   csv_gz:str,
+                                   line_pos:int):
+    for row in v21amounts:
+        if not (min_8byte_int <= row[0] <= max_8byte_int):
+            print (f"*** Insane int value in '{row}' at {line_pos}@{csv_gz} "
+                   " isgnored the entry.", file=sys.stderr)
+            break
+    else:
+        return v21amounts
+    return [row for row in v21amounts
+            if min_8byte_int <= row[0] <= max_8byte_int]
+    
 
 def import_gkg(mongo_conn:pymongo.MongoClient,
-               gkg_csv:pathlib.Path,
+               gkg_csv:str,
                columns_found_nonempty:set[int],
-               opts:options.Options) -> None:
+               opts:options.GkgOptions) -> None:
 
     print (f"Processing {gkg_csv}")
     # print (mongo_conn.gdelt.list_collection_names())
-    with gkg_csv.open('r') as fp:
-        vec = fp.readline().rstrip().split('\t')
+
+    with zipfile.ZipFile(gkg_csv, 'r') as archive:
+        base_name = os.path.basename(gkg_csv)[:-4] # name without '.zip'
+        blob = str(archive.read(base_name), 'latin')
+    pos, gkg_count, line_count = 0, 0, 0
+    while pos < len(blob):
+        end_pos = blob.find('\n', pos)
+        if end_pos < 0:
+            break
+        line = blob[pos:end_pos]
+        pos = end_pos + 1
+        line_count += 1
+        vec = line.rstrip().split('\t')
+        if len(vec) != 27:
+            print (f"Short line {line_count}@{gkg_csv}:[{line}]")
+            continue
         # print (f"{vec[6]=}")
         # run_non_empty_check(vec, columns_found_nonempty)
         gkg = GKG(
@@ -302,7 +340,7 @@ def import_gkg(mongo_conn:pymongo.MongoClient,
             # v21_social_image_embeds
             single_split(';', vec[20]),
 
-            # v21_social_video_embdes
+            # v21_social_video_embeds
             single_split(';', vec[21]),
             
             # v21_quotations
@@ -312,31 +350,66 @@ def import_gkg(mongo_conn:pymongo.MongoClient,
             double_split(';', ',', vec[23]),
 
             # v21_amounts
-            double_split(';', ',', vec[24], (int_or_float, as_is, int)),
+            filter_insane_int_in_v21amount(
+              double_split(';', ',', vec[24], (int_or_float, as_is, int)),
+              gkg_csv,
+              line_count
+            ),
 
             # v21_translation_info
             double_split(';', ',', vec[25], (int_or_float, as_is)),
             
             vec[26],
         )
-        mongo_conn.gdelt.gkg.insert_one(gkg.to_bson())
-
+        if not opts.no_store:
+            try:
+                mongo_conn.gdelt.gkg.insert_one(gkg.to_bson())
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except:
+                print ('Offending GKG:', gkg, file=sys.stderr)
+                raise
+                
+            gkg_count += 1
         # value_list = list(mongo_conn.gdelt.gkg.find({}))
         # gkg = GKG.deserialize(value_list[0])
         # print (value_list[0]['_id'])
-
+    if not opts.quiet:
+        print (f"Inserted {gkg_count} gkg objects");
+        
 
 
 @with_mongo()
-def main(mongo_conn:pymongo.MongoClient,
-         args:list[str],
-         opts:options.Options) -> None:
+def importer(mongo_conn:pymongo.MongoClient,
+             queue: multiprocessing.Queue[str|None],
+             opts:options.GkgOptions
+             ) -> None:
     columns_found_nonempty:set[int] = set()
-    for fname in args:
+    while True:
+        gzfile_path: str | None = queue.get()
+        if gzfile_path is None:
+            break
         import_gkg(mongo_conn,
-                   pathlib.Path(fname),
+                   gzfile_path,
                    columns_found_nonempty,
                    opts)
+
+
+def main(args:list[str], opts:options.GkgOptions) -> None:
+    queue:multiprocessing.Queue[str|None] = (
+        multiprocessing.Queue(opts.num_workers * 2))
+    workers = []
+    for i in range(opts.num_workers):
+        w = multiprocessing.Process(target=importer, args=(queue, opts))
+        w.start()
+        workers.append(w)
+    try:
+        import_util.feed_csv_blobs(".gkg.csv.zip", queue, args, opts)
+    finally:
+        for w in workers:
+            queue.put(None)
+        for w in workers:
+            w.join()
 
 
 if __name__ == '__main__':
@@ -344,10 +417,32 @@ if __name__ == '__main__':
     parser = optparse.OptionParser(usage="How to use %p!")
     parser.add_option('-v', '--verbose', action='store_true', default=False)
     parser.add_option('-q', '--quiet', action='store_true', default=False)
-    parser.add_option('-n', '--num-threads', type=int, default=4)
+    parser.add_option('-w', '--num-workers', type=int, default=2)
+    parser.add_option('-m', '--masterfile', type=str,
+                      default='/opt/gdelt/csv/masterfilelist.txt')
+    parser.add_option('-l', '--lower-limit', type=str,
+                      default='1980-01-01T00-00-00')
+    parser.add_option('-u', '--upper-limit', type=str,
+                      default='2050-01-01T00-00-00')
+    parser.add_option('-d', '--dry-run', default=False, action='store_true')
+    parser.add_option('-n', '--no-store', default=False, action='store_true')
+
     
     opts, args = parser.parse_args()
-    typed_opts = options.Options(opts.quiet, opts.verbose, opts.num_threads)
+    print (opts)
+    opts.upper_limit = options.make_ymdhms_string(opts.upper_limit)
+    opts.lower_limit = options.make_ymdhms_string(opts.lower_limit)
+
+    typed_opts = options.GkgOptions(
+        opts.quiet,
+        opts.verbose,
+        opts.num_workers,
+        opts.masterfile,
+        opts.lower_limit,
+        opts.upper_limit,
+        opts.dry_run,
+        opts.no_store,
+        )
     if len(args) == 0:
         args = ['/opt/gdelt/csv/20230714133000.gkg.csv']
         

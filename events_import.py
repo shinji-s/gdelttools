@@ -15,6 +15,8 @@ import sys
 import time
 import zipfile
 
+import options
+
 MAX_BATCH_SIZE:int = 32
 
 
@@ -190,7 +192,7 @@ def feed_csv_blobs(queue, args, opts) -> None:
     
 
 
-def main(args, opts) -> None:
+def main(args:list[str], opts:options.EventOptions) -> None:
     
     queue:Queue[tuple[str,bytes]|None] = Queue(MAX_BATCH_SIZE)
 
@@ -202,17 +204,12 @@ def main(args, opts) -> None:
     finally:
         queue.put(None)
         proc.join()
-
-
-def make_time_tuple(time_in_readable_format:str) -> str:
-    pattern = re.compile(r'(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})')
-    m = pattern.match(time_in_readable_format)
-    assert m, f"'{time_in_readable_format}' is unparsable."
-    return ''.join([m.group(i) for i in range(1,7)])
     
 if __name__ == '__main__':
     from optparse import OptionParser
     parser = OptionParser()
+    parser.add_option('-q', '--quiet', default=False, action='store_true')
+    parser.add_option('-v', '--verbose', default=False, action='store_true')
     parser.add_option('-m', '--masterfile', type=str,
                       default='/opt/gdelt/csv/masterfilelist.txt')
     parser.add_option('-l', '--lower-limit', type=str,
@@ -221,9 +218,17 @@ if __name__ == '__main__':
                       default='2050-01-01T00-00-00')
     parser.add_option('-d', '--dry-run', default=False, action='store_true')
     parser.add_option('-n', '--no-store', default=False, action='store_true')
-    parser.add_option('-v', '--verbose', default=False, action='store_true')
 
     opts, args = parser.parse_args()
-    opts.lower_limit = make_time_tuple(opts.lower_limit)
-    opts.upper_limit = make_time_tuple(opts.upper_limit)
-    main(args, opts)
+    opts.lower_limit = options.make_ymdhms_string(opts.lower_limit)
+    opts.upper_limit = options.make_ymdhms_string(opts.upper_limit)
+    main(args,
+         options.EventOptions(
+           opts.quiet,
+           opts.verbose,
+           opts.masterfile,
+           opts.lower_limit_ymdhms,
+           opts.upper_limit_ymdhms,
+           opts.dry_run,
+           opts.no_store)
+         )
