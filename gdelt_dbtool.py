@@ -1,3 +1,4 @@
+#! /usr/bin/env python3
 import sys
 
 from mymongo import with_mongo
@@ -19,13 +20,25 @@ def drop(conn, opts, args):
     if not opts.yes:
         print ("Done")
 
+@with_mongo()
+def index(conn, opts, args):
+    target_collection, index_spec = opts.index.split(':', 1)
+
+    getattr(conn.gdelt, opts.drop).createIndex(
+
+    print (target_collection)
+    print (index_spec)
+
 if __name__ == '__main__':
     from optparse import OptionParser
     parser = OptionParser()
 
     parser.add_option('', '--drop', type=str, default=None)
+    parser.add_option('-u', '--index', type=str, default=None)
     parser.add_option('-y', '--yes', action='store_true', default=False)
     opts, args = parser.parse_args()
 
     if opts.drop:
         drop(opts, args)
+    if opts.index:
+        index(opts, args)

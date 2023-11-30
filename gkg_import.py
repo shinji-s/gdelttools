@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import dataclasses
 import json
 import math
 import multiprocessing
@@ -13,7 +12,6 @@ import traceback
 import typing
 import zipfile
 
-import bson # type: ignore
 import pymongo
 
 import import_util
@@ -21,122 +19,7 @@ import options
 
 from mymongo import with_mongo
 
-SourceCollectionID = typing.Literal[
-    1, # WEB
-    2, # CITATION ONLY,
-    3, # CORE
-    4, # DTIC
-    5, # JSOR
-    6, # NONTEXTUALSOURCE
-    ]
-
-SOURCE_WEB, SOURCE_CITATION_ONLY, SOURCE_CORE, SOURCE_DTIC, \
-SOURCE_JSTOR, SOURCE_NON_TEXTUAL = typing.get_args(SourceCollectionID)
-
-
-@dataclasses.dataclass
-class V1Count:
-    count_type: str
-    count: int
-    object_type: str
-    location_type: str
-    location_fullname: str
-    location_countrycode: str
-    location_adm1code: str
-    location_latitude: float
-    location_longitude: float
-    location_feature_id: str
-
-    def serialize(self):
-        values = [1] # version
-        for field in dataclasses.fields(self.__class__):
-            values.append(getattr(self, field.name))
-        return values
-
-@dataclasses.dataclass
-class V21Count(V1Count):
-    location_offset_within_document: int
-
-@dataclasses.dataclass
-class V15Tone:
-    tone: float
-    positive_score: float
-    negative_score: float
-    polarity: float
-    active_reference_density: float
-    self_or_group_reference_density: float
-    word_count: int
-
-    def serialize(self):
-        values = [1] # version
-        for field in dataclasses.fields(self.__class__):
-            values.append(getattr(self, field.name))
-        return values
-
-    @staticmethod
-    def deserialize(values:list[typing.Any]) -> 'V15Tone':
-        if values[0] != 1:  # check version
-            raise Exception(f"Unexpected version '{values[0]}' on serialized V15Tone.")
-        return V15Tone(*values[1:])
-
-
-@dataclasses.dataclass
-class GKG:
-    gkg_record_id: str
-    v1_date: datetime.date
-    v2_source_collection_identifier: SourceCollectionID
-    v2_source_common_name: str
-    v2_document_identifier: str
-    v1_counts: list[V1Count]
-    v21_counts: list[V21Count]
-    v1_themes: list[str]
-    v2_enhanced_themes: list[str]
-    v1_locations: list[list[str]]
-    v2_enhanced_locations: list[list[str]]
-    v1_persons: list[str]
-    v2_enhanced_persons: list[str]
-    v1_organizations: list[str]
-    v2_enhanced_organizations: list[str]
-    # v15_tone: list[str]
-    # Tone, Positive Score, Negative Score, Polarity,
-    # Activity Reference Density, Self/Group Reference Density, word-count
-    v15_tone: V15Tone
-    v21_enhanced_dates: list[datetime.datetime]
-    v2_gcam: dict[str, float]
-    v2_sharing_image: str
-    v21_related_images: list[str]
-    v21_social_image_embeds: list[str]
-    v21_social_video_embeds: list[str]
-    v21_quotations: list[list[str]]
-    v21_all_names: list[tuple[str, int]]
-    v21_amounts: list[tuple[int|float, str, int]]
-    v21_translation_info: list[tuple[str, str]]
-    v2_extras_xml: str
-    
-
-    def to_bson(self) -> bson.son.SON:
-        # print (dataclasses.fields(self.__class__))
-        row: bson.son.SON = bson.son.SON()
-        value_list:list[typing.Any] = []
-        for field in dataclasses.fields(self.__class__):
-            value = getattr(self, field.name)
-            if field.name == 'v1_date':
-                value = value.isoformat()
-            elif field.name == 'v1_counts':
-                value = [v1count.serialize() for v1count in value]
-            elif field.name == 'v21_counts':
-                value = [v21count.serialize() for v21count in value]
-            elif field.name == 'v15_tone':
-                value = value.serialize()
-            value_list.append(value)
-        row['version'] = 1
-        row['value_list'] = value_list
-        return row
-
-    @staticmethod
-    def deserialize(bson_value:bson.son.SON) -> 'GKG':
-        assert bson_value['version'] == 1
-        return GKG(*bson_value['value_list'])
+from gkg import GKG, SourceCollectionID, V1Count, V21Count, V15Tone
 
 
 def as_is(x:typing.Any) -> typing.Any:
@@ -169,9 +52,10 @@ def double_split(
     chunks_list = [
         block.split(second_level_delim) for block
         in column_value.strip(first_level_delim).split(first_level_delim)]
-    if converters == []:
-        return chunks_list
-    return [[f(x) for f, x in zip(converters, chunks)]
+    num_chunks = len(chunks_list[0])
+    if len(converters) < num_chunks:
+        converters = converters + [str] * (num_chunks - len(converters))
+    return [[f(x) for f, x in zip(converters, chunks, strict=True)]
             for chunks in chunks_list]
 
 
@@ -182,7 +66,9 @@ def single_split(delim:str,
     chunks = column_value.rstrip(delim).split(delim)
     if converters is None:
         return chunks
-    return [f(x) for f, x in zip(converters, chunks)]
+    if len(converters) < len(chunks):
+        converters = converters + [str] * (len(chunks)-len(converters))
+    return [f(x) for f, x in zip(converters, chunks, strict=True)]
 
 
 def float_or_none(s:str) -> float | None:
@@ -329,7 +215,7 @@ def import_gkg(mongo_conn:pymongo.MongoClient,
             double_split(';', '#', vec[16], (int, int, int, int, int)),
 
             # v2_gcam
-            {k: float(v) for (k, v) in double_split(',', ':', vec[17])},
+            {k: int_or_float(v) for (k, v) in double_split(',', ':', vec[17])},
 
             # v2_sharing_image
             vec[18],
@@ -346,7 +232,7 @@ def import_gkg(mongo_conn:pymongo.MongoClient,
             # v21_quotations
             double_split('#', '|', vec[22]),
             
-            # v21_allnames
+            # v21_all_names
             double_split(';', ',', vec[23]),
 
             # v21_amounts
@@ -358,7 +244,8 @@ def import_gkg(mongo_conn:pymongo.MongoClient,
 
             # v21_translation_info
             double_split(';', ',', vec[25], (int_or_float, as_is)),
-            
+
+            # v2_extras_xml
             vec[26],
         )
         if not opts.no_store:

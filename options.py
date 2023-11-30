@@ -2,10 +2,10 @@ import dataclasses
 import re
 
 def make_ymdhms_string(time_in_readable_format:str) -> str:
-    pattern = re.compile(r'(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})')
+    pattern = re.compile(r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})')
     m = pattern.match(time_in_readable_format)
     assert m, f"'{time_in_readable_format}' is unparsable."
-    return ''.join([m.group(i) for i in range(1,7)])
+    return ''.join([m.group(i) for i in range(1,6)] + ['00'])
 
 class OptionBase:
     def __post_init__(self):
