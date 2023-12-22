@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import math
 import os
 import typing
 
@@ -8,6 +9,13 @@ import requests
 
 import options
 
+max_8byte_int = int(math.pow(2, 63)) - 1
+min_8byte_int = -int(math.pow(2, 63))
+
+def is_valid_amount(amount:str) -> bool:
+    if amount.isdigit():
+        return (min_8byte_int <= int(amount) <= max_8byte_int)
+    return True
 
 def feed_csv_blobs(ending_key:str,
                    queue: multiprocessing.Queue[str|None],
@@ -25,7 +33,8 @@ def feed_csv_blobs(ending_key:str,
                     break
                 vec = line.rstrip().split(' ')
                 if len(vec) != 3:
-                    print (f"ill-formed line: '{line.rstrip()} @ {i}'")
+                    if not opts.quiet:
+                        print (f"ill-formed line: '{line.rstrip()} @ {i}'")
                     continue
                 assert len(vec)==3, f"Bad format '{line}'."
                 size, hash, url = vec
@@ -41,10 +50,11 @@ def feed_csv_blobs(ending_key:str,
                 if opts.upper_limit_ymdhms <= timestamp_part:
                     if opts.verbose:
                         print (f'Found {zip_name} which is newer than ' +
-                               opts.upper_limit_ymdhms)
+                               opts.upper_limit_ymdhms + '. Exiting')
                         break
                     continue
-                gzcsv_path = os.path.join('/opt/gdelt/csv', zip_name)
+                year = timestamp_part[:4]
+                gzcsv_path = f'/opt/gdelt/csv/{year}/{zip_name}'
                 if not os.path.exists(gzcsv_path):
                     if opts.dry_run:
                         print ("Not fetching {url} in dry-run.")

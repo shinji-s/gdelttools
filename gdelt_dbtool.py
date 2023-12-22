@@ -5,40 +5,58 @@ from mymongo import with_mongo
 
 @with_mongo()
 def drop(conn, opts, args):
-    if opts.drop not in ('events', 'gkg'):
-        raise Exception("You can only drop 'events' or 'gkg' table.")
-    if not opts.yes:
-        sys.stdout.write("Are you sure?:")
-        sys.stdout.flush()
-        l = sys.stdin.readline()
-        if l[0].upper() != 'Y':
-            print ("Canceled deletion.")
-            return
-        sys.stdout.write(f"Deleting {opts.drop}: ")
-        sys.stdout.flush()
-    getattr(conn.gdelt, opts.drop).drop()
-    if not opts.yes:
-        print ("Done")
+    for collection_name in args:
+        if collection_name not in ('events', 'gkg'):
+            raise Exception("You can only drop 'events' or 'gkg' table.")
+        if not opts.yes:
+            sys.stdout.write(f"Are you sure to drop {collection_name}?:")
+            sys.stdout.flush()
+            l = sys.stdin.readline()
+            if l[0].upper() != 'Y':
+                print ("Canceled deletion.")
+                return
+            sys.stdout.write(f"Dropping {opts.drop}: ")
+            sys.stdout.flush()
+        getattr(conn.gdelt, collection_name).drop()
+        if not opts.yes:
+            print ("Dropped.")
 
 @with_mongo()
 def index(conn, opts, args):
-    target_collection, index_spec = opts.index.split(':', 1)
+    for index_spec in args:
+        collection_name, index_spec = index_spec.split(':', 1)
+        print (f"Creating index '{index_spec}' on {collection_name}...")
+        coll = getattr(conn.gdelt, collection_name)
+        coll.create_index(index_spec.split(','))
 
-    getattr(conn.gdelt, opts.drop).createIndex(
 
-    print (target_collection)
-    print (index_spec)
+@with_mongo()
+def describe(conn, opts, args):
+    for collection_name in args:
+        coll = getattr(conn.gdelt, collection_name)
+        x = coll.find_one({})
+        for attr in x:
+            print (attr)
 
 if __name__ == '__main__':
     from optparse import OptionParser
     parser = OptionParser()
 
-    parser.add_option('', '--drop', type=str, default=None)
-    parser.add_option('-u', '--index', type=str, default=None)
+    parser.add_option('', '--drop', action='store_true', default=False)
+    parser.add_option('-u', '--index', action='store_true', default=False)
+    parser.add_option('-d', '--describe', action='store_true', default=False)
     parser.add_option('-y', '--yes', action='store_true', default=False)
+    all_actions = ['drop', 'index', 'describe']
     opts, args = parser.parse_args()
+
+    specified_actions = [a for a in all_actions if getattr(opts, a)]
+    if len(specified_actions) != 1:
+        print (f"One of the actions '{all_actions}' must be specified once and only once")
+        sys.exit(1)
 
     if opts.drop:
         drop(opts, args)
-    if opts.index:
+    elif opts.index:
         index(opts, args)
+    elif opts.describe:
+        describe(opts, args)
