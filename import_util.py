@@ -12,15 +12,46 @@ import options
 max_8byte_int = int(math.pow(2, 63)) - 1
 min_8byte_int = -int(math.pow(2, 63))
 
-def is_valid_amount(amount:str) -> bool:
-    if amount.isdigit():
-        return (min_8byte_int <= int(amount) <= max_8byte_int)
-    return True
+def is_valid_amount(amount:bytes) -> bool:
+    if 16 < len(amount):
+        return False
+    try:
+        if amount.isdigit():
+            return min_8byte_int <= int(amount) <= max_8byte_int
+        float(amount)
+        return True
+    except ValueError:
+        return False
 
-def feed_csv_blobs(ending_key:str,
-                   queue: multiprocessing.Queue[str|None],
-                   args: list[str],
-                   opts: options.GkgOptions):
+def make_csv_path_generator(args:list[str],
+                            opts:options.GkgOptions,
+                            ) -> typing.Generator:
+    if 0 < len(args):
+        def nextrow_g() -> typing.Generator:
+            for gzfile_path in args:
+                yield gzfile_path
+    else:
+        def nextrow_g() -> typing.Generator:
+            with open('/var/log/gdelt/csv_fetch_errors.csv', 'a') as fp:
+                def error_out(msg:str):
+                    print (msg)
+                    print (msg, file=fp)
+                for gzfile_path in walk_on_csv_rows(
+                    ".gkg.csv.zip", error_out, opts):
+                    yield gzfile_path
+    return nextrow_g()
+
+
+# def feed_csv_blobs(ending_key:str,
+#                    queue: multiprocessing.Queue[str|None],
+#                    opts: options.GkgOptions):
+#     for line in walk_on_csv_rows(ending_key, args, opts):
+#         queue.put(line)
+
+
+def walk_on_csv_rows(ending_key:str,
+                     msgout:typing.Callable[[str], None],
+                     opts: options.GkgOptions) -> typing.Generator:
     i:int = 0
     line: str|None = None
     try:
@@ -34,7 +65,7 @@ def feed_csv_blobs(ending_key:str,
                 vec = line.rstrip().split(' ')
                 if len(vec) != 3:
                     if not opts.quiet:
-                        print (f"ill-formed line: '{line.rstrip()} @ {i}'")
+                        msgout(f"ill-formed line: '{line.rstrip()} @ {i}'")
                     continue
                 assert len(vec)==3, f"Bad format '{line}'."
                 size, hash, url = vec
@@ -57,7 +88,7 @@ def feed_csv_blobs(ending_key:str,
                 gzcsv_path = f'/opt/gdelt/csv/{year}/{zip_name}'
                 if not os.path.exists(gzcsv_path):
                     if opts.dry_run:
-                        print ("Not fetching {url} in dry-run.")
+                        msgout("Not fetching {url} in dry-run.")
                         continue
                     if not opts.quiet:
                         print (f'Fetching from {url}')
@@ -67,7 +98,7 @@ def feed_csv_blobs(ending_key:str,
                                 wfp.write(r.content)
                             os.rename(gzcsv_path+'.tmp', gzcsv_path)
                         else:
-                            print (f"Bad HTTP-STATUS '{r.status_code}'")
+                            msgout(f"Bad HTTP-STATUS '{r.status_code}' from {url}")
                             continue
                 else:
                     if opts.verbose:
@@ -76,7 +107,7 @@ def feed_csv_blobs(ending_key:str,
                         continue
 
                 if not opts.no_store:
-                    queue.put(gzcsv_path)
+                    yield gzcsv_path
 
         if not opts.quiet:
             print ('pushed all csv files!')

@@ -13,6 +13,7 @@ import typing
 import zipfile
 
 import pymongo
+import bson # type: ignore
 
 import import_util
 import options
@@ -57,7 +58,7 @@ def do_main(mongo_conn:pymongo.MongoClient,
         while blob[eol_pos-13:eol_pos] != b'</PAGE_TITLE>':
             eol_pos = blob.find(b'\n', eol_pos + 1)
             if eol_pos < 0:
-                print(f"Found dangling line. {line_count}@{csvgz_path}:[{line}]")
+                print(f"Found dangling line. {line_count}@{csvgz_path}")
                 break_flag = True
                 break
             print(f"Joining line {line_count}@{csvgz_path}")
@@ -68,7 +69,7 @@ def do_main(mongo_conn:pymongo.MongoClient,
         pos = eol_pos + 1
         src_columns = line.rstrip().split(b'\t')
         if len(src_columns) != 27:
-            print (f"Short line {line_count}@{csvgz_path}:[{line}]")
+            print (f"Short line {line_count}@{csvgz_path}:[{line!r}]")
             continue
         remove_bad_locations(src_columns)
         remove_insane_ints(src_columns)
@@ -77,22 +78,25 @@ def do_main(mongo_conn:pymongo.MongoClient,
             )
         # print (f"{gkg_son_obj=}")
         try:
+            assert isinstance(gkg_son_obj, bson.son.SON)
             gkg = GKG.deserialize(gkg_son_obj)
         except:
             print ('OFFENDING SON:', gkg_son_obj)
             raise
         dst_columns = gkg.to_csv().split(b'\t')
-        column_matches = [(i, src == dst, f"{src}", f"{dst}")
-                          for i, (src, dst)
-                          in enumerate(zip(src_columns, dst_columns))]
-        if all([m[1] == True for m in column_matches]):
+
+        if all([src == dst for src, dst in zip(src_columns, dst_columns)]):
             if not opts.quiet:
-                print (f"{src_columns[0]} OK")
-        else:
-            print ("Ouch!")
-            print (column_matches)
-            print (gkg_son_obj)
-            sys.exit(1)
+                print (f"{src_columns[0]!r} OK")
+            return
+        mismatched = [(i, f"{src!r}", f"{dst!r}")
+                      for i, (src, dst)
+                      in enumerate(zip(src_columns, dst_columns))
+                      if src != dst]
+        print ("Ouch!")
+        print (f"{mismatched=}")
+        print (gkg_son_obj)
+        sys.exit(1)
 
 @with_mongo()
 def main(mongo_conn: pymongo.MongoClient,
@@ -133,8 +137,11 @@ if __name__ == '__main__':
         opts.dry_run,
         opts.no_store,
         )
+
     if len(args) == 0:
         # args = ['./gdelttools/20230701000000.gkg.csv']
-        args = ['/opt/gdelt/csv/20230701000000.gkg.csv.zip']
+        targets = ['/opt/gdelt/csv/20230701000000.gkg.csv.zip']
+    else:
+        targets = sys.argv[1:]
 
-    main(args, typed_opts)
+    main(targets, typed_opts)

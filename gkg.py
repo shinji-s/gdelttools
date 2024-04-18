@@ -20,6 +20,8 @@ def validate_as_SurceCollectionID(n: int) -> SourceCollectionID:
 SOURCE_WEB, SOURCE_CITATION_ONLY, SOURCE_CORE, SOURCE_DTIC, \
 SOURCE_JSTOR, SOURCE_NON_TEXTUAL = typing.get_args(SourceCollectionID)
 
+BsonMapping = typing.Mapping[str, typing.Any]
+
 class GdeltObject:
     def serialize(self):
         return {field.name:getattr(self, field.name)
@@ -31,7 +33,7 @@ class GdeltObject:
 
     @staticmethod
     def create(class_: typing.Any,
-               row: typing.Mapping[typing.Any]
+               row: BsonMapping,
                ) -> typing.Any:
         args = [row[field.name] for field in dataclasses.fields(class_)]
         return class_(*args)
@@ -55,7 +57,7 @@ class V1Count(GdeltObject):
         return int(self.count_as_bytes)
 
     @staticmethod
-    def deserialize(version:int, row:list[typing.Any]) -> V1Count:
+    def deserialize(version:int, row:BsonMapping) -> V1Count:
         return GdeltObject.create(V1Count, row)
 
 
@@ -64,7 +66,7 @@ class V21Count(V1Count):
     location_offset_within_document: int
 
     @staticmethod
-    def deserialize(version:int, row:list[typing.Any]) -> V21Count:
+    def deserialize(version:int, row:BsonMapping) -> V21Count:
         return GdeltObject.create(V21Count, row)
 
 
@@ -83,22 +85,18 @@ class V15Tone(GdeltObject):
     #     args = [row[field.name] for field in dataclasses.fields(V15Tone)]
     #     return V15Tone(*args)
     @staticmethod
-    def deserialize(version:int,
-                    row:typing.Mapping[typing.Any]
-                    ) -> V15Tone:
+    def deserialize(version:int, row: BsonMapping) -> V15Tone:
         return GdeltObject.create(V15Tone, row)
 
 
 @dataclasses.dataclass
 class V21Amount(GdeltObject):
-    amount: int | float
+    amount: int | float | str
     object_: bytes
     offset: int
 
     @staticmethod
-    def deserialize(version:int,
-                    row:typing.Mapping[typing.Any]
-                    ) -> V21Amount:
+    def deserialize(version:int, row:BsonMapping) -> V21Amount:
         return GdeltObject.create(V21Amount, row)
 
 
@@ -113,21 +111,34 @@ class V1Location(GdeltObject):
     feature_id: str | float
 
     @staticmethod
-    def deserialize(version:int,
-                    row:typing.Mapping[typing.Any]
-                    ) -> V1Location:
+    def deserialize(version:int, row:BsonMapping) -> V1Location:
         return GdeltObject.create(V1Location, row)
+
+@dataclasses.dataclass
+class V2EnhancedLocation(GdeltObject):
+    type: int
+    fullname: bytes
+    country_code: bytes
+    adm1_code: bytes
+    adm2_code: bytes
+    latitude: float | None
+    longitude: float | None
+    feature_id: int | float | bytes
+    offset: int
+
+    @staticmethod
+    def deserialize(version:int, row:BsonMapping) -> V2EnhancedLocation:
+        return GdeltObject.create(V2EnhancedLocation, row)
+
 
 
 @dataclasses.dataclass
 class V2EnhancedTheme(GdeltObject):
-    theme: str
+    theme: bytes
     offset: int
 
     @staticmethod
-    def deserialize(version:int,
-                    row:typing.Mapping[typing.Any]
-                    ) -> V2EnhancedTheme:
+    def deserialize(version:int, row:BsonMapping) -> V2EnhancedTheme:
         return GdeltObject.create(V2EnhancedTheme, row)
 
 
@@ -152,10 +163,46 @@ class V21EnhancedDate(GdeltObject):
         return year(self.year_as_bytes)
 
     @staticmethod
-    def deserialize(version:int,
-                    row:typing.Mapping[typing.Any]
-                    ) -> V21EnhancedDate:
+    def deserialize(version:int, row:BsonMapping) -> V21EnhancedDate:
         return GdeltObject.create(V21EnhancedDate, row)
+
+@dataclasses.dataclass
+class V2EnhancedPerson(GdeltObject):
+    name: bytes
+    offset: int
+
+    @staticmethod
+    def deserialize(version:int, row:BsonMapping) -> V2EnhancedPerson:
+        return GdeltObject.create(V2EnhancedPerson, row)
+
+@dataclasses.dataclass
+class V2EnhancedOrganization(GdeltObject):
+    name: bytes
+    offset: int
+
+    @staticmethod
+    def deserialize(version:int, row:BsonMapping) -> V2EnhancedOrganization:
+        return GdeltObject.create(V2EnhancedOrganization, row)
+
+@dataclasses.dataclass
+class V2GCAM(GdeltObject):
+    name: bytes
+    offset: int
+
+    @staticmethod
+    def deserialize(version:int, row:BsonMapping) -> V2GCAM:
+        return GdeltObject.create(V2GCAM, row)
+
+@dataclasses.dataclass
+class V21Quotation(GdeltObject):
+    offset: int
+    length: int
+    verb: bytes
+    quote: bytes
+
+    @staticmethod
+    def deserialize(version:int, row:BsonMapping) -> V2GCAM:
+        return GdeltObject.create(V2GCAM, row)
 
 
 def to_bytes(x:typing.Any) -> bytes:
@@ -164,30 +211,32 @@ def to_bytes(x:typing.Any) -> bytes:
     return bytes(str(x), 'ascii')
 
 def single_join(delim: bytes,
-                value_list: list[bytes|int|float]
+                value_list: typing.Sequence[bytes|int|float]
                 ) -> bytes:
     return delim.join(map(to_bytes, value_list))
 
 def single_join_with_excessdelim(delim: bytes,
-                                 value_list: list[bytes|int|float]
+                                 value_list: typing.Sequence[bytes|int|float]
                                  ) -> bytes:
     joined = delim.join(map(to_bytes, value_list))
     if len(joined) == 0:
         return b''
     return joined + delim
 
-def double_join(first_delim: bytes,
-                second_delim: bytes,
-                value_list: list[list[bytes|int|float]]
-                ) -> str:
+def double_join(
+    first_delim: bytes,
+    second_delim: bytes,
+    value_list: typing.Sequence[typing.Sequence[bytes|int|float]]
+    ) -> bytes:
     return first_delim.join(
         [second_delim.join(map(to_bytes, inner_value_list))
          for inner_value_list in value_list])
 
-def double_join_with_excessdelim(first_delim: str,
-                                 second_delim: str,
-                                 value_list: list[list[str|int|float]]
-                                 ) -> str:
+def double_join_with_excessdelim(
+    first_delim: bytes,
+    second_delim: bytes,
+    value_list: typing.Sequence[typing.Sequence[bytes|int|float]]
+    ) -> bytes:
     joined = first_delim.join(
         [second_delim.join(map(to_bytes, inner_value_list))
          for inner_value_list in value_list])
@@ -196,32 +245,32 @@ def double_join_with_excessdelim(first_delim: str,
     return joined + first_delim
 
 
-def double_join_dict(first_delim: bytes,
-                     second_delim: bytes,
-                     value_list: list[list[str|int|float]]
-                     ) -> bytes:
-    return first_delim.join(
-        [second_delim.join(map(to_bytes, inner_value_list))
-         for inner_value_list in value_list.items()])
+# def double_join_dict(first_delim: bytes,
+#                      second_delim: bytes,
+#                      value_list: typing.Mapping[bytes,list[str|int|float]]
+#                      ) -> bytes:
+#     return first_delim.join(
+#         [second_delim.join(map(to_bytes, inner_value_list))
+#          for inner_value_list in value_list.items()])
 
 
-def csv_bytes(v:typing.Any) -> str:
+def csv_bytes(v:typing.Any) -> bytes:
     if v is None:
         return b''
     return to_bytes(v)
 
-def object_list_join_with_excessdelim(outer_delim: str,
-                                      obj_field_delim: str,
-                                      object_list:list[typing.Any]) -> str:
+def object_list_join_with_excessdelim(outer_delim: bytes,
+                                      obj_field_delim: bytes,
+                                      object_list:list[typing.Any]) -> bytes:
     if len(object_list) == 0:
         return b''
     return outer_delim.join(
         obj_field_delim.join([csv_bytes(v) for v in o.value_list()])
         for o in object_list) + outer_delim
 
-def object_list_join(outer_delim: str,
-                     obj_field_delim: str,
-                     object_list:list[typing.Any]) -> str:
+def object_list_join(outer_delim: bytes,
+                     obj_field_delim: bytes,
+                     object_list:list[typing.Any]) -> bytes:
     return outer_delim.join(
         obj_field_delim.join([csv_bytes(v) for v in o.value_list()])
         for o in object_list)
@@ -238,17 +287,17 @@ class GKG:
     v1_themes: list[bytes]                              #7
     v2_enhanced_themes: list[V2EnhancedTheme]           #8
     v1_locations: list[V1Location]                      #9
-    v2_enhanced_locations: list[list[V2EnhancedLocation]] #10
+    v2_enhanced_locations: list[V2EnhancedLocation]     #10
     v1_persons: list[bytes]                             #11
-    v2_enhanced_persons: list[bytes]                    #12
+    v2_enhanced_persons: list[V2EnhancedPerson]         #12
     v1_organizations: list[bytes]                       #13
-    v2_enhanced_organizations: list[bytes]              #14
+    v2_enhanced_organizations: list[V2EnhancedOrganization] #14
     # v15_tone: list[str]
     # Tone, Positive Score, Negative Score, Polarity, 
     # Activity Reference Density, Self/Group Reference Density, word-count
     v15_tone: V15Tone                                   #15
-    v21_enhanced_dates: V21EnhancedDate[int]            #16
-    v2_gcam: dict[str, float]                           #17
+    v21_enhanced_dates: list[V21EnhancedDate]           #16
+    v2_gcams: list[V2GCAM]                              #17
     v2_sharing_image: bytes                             #18
     v21_related_images: list[bytes]                     #19
     v21_social_image_embeds: list[bytes]                #20
@@ -257,7 +306,7 @@ class GKG:
     v21_all_names: list[tuple[bytes, int]]              #23
     v21_amounts: list[V21Amount]
     v21_translation_info: list[tuple[bytes, bytes]]
-    v2_extras_xml: str
+    v2_extras_xml: bytes
     
 
     def to_bson(self) -> bson.son.SON:
@@ -270,8 +319,12 @@ class GKG:
                 'v21_counts',
                 'v21_amounts',
                 'v2_enhanced_themes',
+                'v2_enhanced_persons',
                 'v1_locations',
                 'v21_enhanced_dates',
+                'v2_enhanced_locations',
+                'v2_enhanced_organizations',
+                'v2_gcams',
                 ]:
                 value = [obj.serialize() for obj in value]
             elif field.name == 'v1_date':
@@ -304,15 +357,19 @@ class GKG:
              for args in vl[8]],                    # v2_enhanced_themes
             [V1Location.deserialize(version, args)
              for args in vl[9]],                    # v1_locations
-            vl[10],                                 # v2_enhanced_locations
+            [V2EnhancedLocation.deserialize(version, args)
+             for args in  vl[10]],                  # v2_enhanced_locations
             vl[11],                                 # v1_persons
-            vl[12],                                 # v2_enhanced_persons
+            [V2EnhancedPerson.deserialize(version, args)
+             for args in vl[12]],                   # v2_enhanced_persons
             vl[13],                                 # v1_organizations
-            vl[14],                                 # v2_enhanced_organizations
+            [V2EnhancedOrganization.deserialize(version, args)
+             for args in vl[14]],                   # v2_enhanced_organizations
             V15Tone.deserialize(version, vl[15]),   # v15_tone
             [V21EnhancedDate.deserialize(version, args)
              for args in vl[16]],                   # v21_enhanced_dates
-            vl[17],                                 # v2_gcam
+            [V2GCAM.deserialize(version, args)
+             for args in vl[17]],                   # v2_gcam
             vl[18],                                 # v2_sharing_image
             vl[19],                                 # v2_related_image
             vl[20],                                 # v21_social_image_embdeds
@@ -328,7 +385,7 @@ class GKG:
         return gkg
 
 
-    def to_csv(self) -> str:
+    def to_csv(self) -> bytes:
         # for c in self.v1_counts:
         #     print (f"{c.count_as_bytes=} {c.count=}")
         return b'\t'.join([
@@ -343,14 +400,14 @@ class GKG:
             object_list_join_with_excessdelim(b';', b',',
                                               self.v2_enhanced_themes),
             object_list_join(b';', b'#', self.v1_locations),
-            double_join(b';', b'#', self.v2_enhanced_locations), # 10
+            object_list_join(b';', b'#', self.v2_enhanced_locations), # 10
             single_join(b';', self.v1_persons),
-            double_join(b';', b'#', self.v2_enhanced_persons),
+            object_list_join(b';', b'#', self.v2_enhanced_persons),
             single_join(b';', self.v1_organizations),
-            double_join(b';', b',', self.v2_enhanced_organizations),
+            object_list_join(b';', b',', self.v2_enhanced_organizations),
             single_join(b',', self.v15_tone.value_list()),       # 15
             object_list_join(b';', b'#', self.v21_enhanced_dates),
-            double_join_dict(b',', b':', self.v2_gcam),
+            object_list_join(b',', b':', self.v2_gcams),
             self.v2_sharing_image,
             single_join(b';', self.v21_related_images),
             single_join_with_excessdelim(b';', self.v21_social_image_embeds),
