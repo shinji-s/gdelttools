@@ -38,6 +38,14 @@ def describe(conn, opts, args):
         for attr in x:
             print (attr)
 
+@with_mongo()
+def fetch(conn, opts, args):
+    for collection_name in args:
+        coll = getattr(conn.gdelt, collection_name)
+        curs = coll.find()
+        for i in range(opts.fetch):
+            print (curs.next())
+
 if __name__ == '__main__':
     from optparse import OptionParser
     parser = OptionParser()
@@ -46,7 +54,8 @@ if __name__ == '__main__':
     parser.add_option('-u', '--index', action='store_true', default=False)
     parser.add_option('-d', '--describe', action='store_true', default=False)
     parser.add_option('-y', '--yes', action='store_true', default=False)
-    all_actions = ['drop', 'index', 'describe']
+    parser.add_option('-n', '--fetch', type=int, default=0)
+    all_actions = ['drop', 'index', 'describe', 'fetch']
     opts, args = parser.parse_args()
 
     specified_actions = [a for a in all_actions if getattr(opts, a)]
@@ -60,3 +69,5 @@ if __name__ == '__main__':
         index(opts, args)
     elif opts.describe:
         describe(opts, args)
+    elif 0 < opts.fetch:
+        fetch(opts, args)

@@ -106,8 +106,7 @@ def walk_on_csv_rows(ending_key:str,
                     if opts.dry_run:
                         continue
 
-                if not opts.no_store:
-                    yield gzcsv_path
+                yield gzcsv_path
 
         if not opts.quiet:
             print ('pushed all csv files!')

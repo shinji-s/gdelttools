@@ -30,7 +30,7 @@ from gkg import (GKG, SourceCollectionID, V15Tone, V1Count, V21Amount,
 def as_is(x:typing.Any) -> typing.Any:
     return x
 
-def  convert_to_source_collection_identifier(
+def convert_to_source_collection_identifier(
     column_value:bytes
     ) -> SourceCollectionID:
     ivalue = int(column_value)
@@ -412,6 +412,7 @@ def makeGKGfromColumns(vec: list[bytes],
     return gkg
 
 
+@with_mongo()
 def import_gkg(mongo_conn:pymongo.MongoClient,
                gkg_csv:str,
                columns_found_nonempty:set[int],
@@ -447,13 +448,17 @@ def import_gkg(mongo_conn:pymongo.MongoClient,
         #    continue
         # print (f"{vec[0]=} {vec[9]=}")
         try:
-            gkg = makeGKGfromColumns(vec, gkg_csv, line_count, warn_out)
+            x = mongo_conn.gdelt.gkg.find_one({'gkg_record_id':vec[0]})
+            if x is None:
+                gkg = makeGKGfromColumns(vec, gkg_csv, line_count, warn_out)
+            else:
+                gkg = None
         except (KeyboardInterrupt, SystemExit):
             raise
         except:
             print (f"Offending row:{vec[0]!r}")
             raise
-        if not opts.no_store:
+        if gkg is not None and not opts.no_store:
             try:
                 mongo_conn.gdelt.gkg.insert_one(gkg.to_bson())
             except (KeyboardInterrupt, SystemExit):
@@ -490,9 +495,7 @@ def logger(logging_queue: multiprocessing.Queue[tuple[str,str]|None],
         fp.close()
 
 
-@with_mongo()
-def importer(mongo_conn:pymongo.MongoClient,
-             queue: multiprocessing.Queue[str|None],
+def importer(queue: multiprocessing.Queue[str|None],
              logging_queue: multiprocessing.Queue[tuple[str,str]|None],
              opts:options.GkgOptions
              ) -> None:
@@ -504,8 +507,7 @@ def importer(mongo_conn:pymongo.MongoClient,
         year_month_part = os.path.basename(gzfile_path)[:6]
         def warn_out(msg:str):
             logging_queue.put((year_month_part, msg))
-        import_gkg(mongo_conn,
-                   gzfile_path,
+        import_gkg(gzfile_path,
                    columns_found_nonempty,
                    opts,
                    warn_out)
@@ -536,6 +538,15 @@ def main(nextrow_g:typing.Generator, opts:options.GkgOptions) -> None:
         logger_.join()
         for w in workers:
             w.join()
+
+
+def make_csv_storage_dir(opts:options.GkgOptions) -> None:
+    start_year = int(opts.lower_limit[:4])
+    end_year = int(opts.upper_limit[:4])
+    for y in range(start_year, end_year + 1):
+        dirpath = f'/opt/gdelt/csv/{y}'
+        if not os.path.exists(dirpath):
+            os.mkdir(dirpath)
 
 
 if __name__ == '__main__':
@@ -570,6 +581,8 @@ if __name__ == '__main__':
         opts.dry_run,
         opts.no_store,
         )
+
+    make_csv_storage_dir(opts)
 
     main(import_util.make_csv_path_generator(args, typed_opts),
          typed_opts)

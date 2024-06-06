@@ -418,4 +418,3 @@ class GKG:
             double_join(b';', b',', self.v21_translation_info),
             self.v2_extras_xml,
             ])
-        
